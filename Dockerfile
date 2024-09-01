@@ -12,7 +12,7 @@
 # Start with the python 3.10 Jupyter scipy-notebook docker-image.
 FROM jupyter/scipy-notebook:x86_64-python-3.10
 # Note the Maintainer.
-MAINTAINER Noah C. Benson <nben@uw.edu>
+LABEL maintainer="Noah C. Benson <nben@uw.edu>"
 
 
 # The Root Operations ##########################################################
@@ -54,20 +54,20 @@ RUN chown -R $NB_USER /home/$NB_USER/.local
 # Download the required FreeSurfer subjects.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends curl
-RUN curl -L -o /data/required_subjects/fsaverage.tar.gz \
-      https://github.com/noahbenson/neuropythy/wiki/files/fsaverage.tar.gz \
- && cd /data/required_subjects \
- && tar zxf fsaverage.tar.gz \
- && chown -R root.root ./fsaverage \
- && chmod -R 775 ./fsaverage \
- && rm fsaverage.tar.gz
-RUN curl -L -o /data/required_subjects/fsaverage_sym.tar.gz \
-      https://github.com/noahbenson/neuropythy/wiki/files/fsaverage_sym.tar.gz \
- && cd /data/required_subjects \
- && tar zxf fsaverage_sym.tar.gz \
- && chown -R root.root ./fsaverage_sym \
- && chmod -R 775 ./fsaverage_sym \
- && rm ./fsaverage_sym.tar.gz
+# RUN curl -L -o /data/required_subjects/fsaverage.tar.gz \
+#       https://github.com/noahbenson/neuropythy/wiki/files/fsaverage.tar.gz \
+#  && cd /data/required_subjects \
+#  && tar zxf fsaverage.tar.gz \
+#  && chown -R root.root ./fsaverage \
+#  && chmod -R 775 ./fsaverage \
+#  && rm fsaverage.tar.gz
+# RUN curl -L -o /data/required_subjects/fsaverage_sym.tar.gz \
+#       https://github.com/noahbenson/neuropythy/wiki/files/fsaverage_sym.tar.gz \
+#  && cd /data/required_subjects \
+#  && tar zxf fsaverage_sym.tar.gz \
+#  && chown -R root.root ./fsaverage_sym \
+#  && chmod -R 775 ./fsaverage_sym \
+#  && rm ./fsaverage_sym.tar.gz
 
 
 # The User Operations ##########################################################
@@ -110,7 +110,7 @@ RUN pip install -r /build/requirements.txt
 
 # Copy User Files ##############################################################
 
-user $NB_USER
+USER $NB_USER
 # Now, do things that depend on the local files. COPY statements should go in
 # this section rather than earlier when possible.
 COPY docker/jupyter_notebook_config.py /home/$NB_USER/.jupyter/

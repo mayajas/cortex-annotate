@@ -23,24 +23,25 @@ init: |
   # libraries, so we load them here.
   import numpy as np
   import neuropythy as ny
-  from os.path import join as opj
-  from math import degrees
-  
+  # We also want to create an object that tracks the S3 path/data for the NSD.
+  # We use the cache path '/cache/nsd' because the /cache directory is always
+  # abailable for use with cache files inside of the docker container that runs
+  # the annotation tool.
+  nsd_path = ny.util.pseudo_path(
+      's3://natural-scenes-dataset/nsddata/',
+      cache_path='/cache/nsd')
   # We will specifically load these population receptive fields (pRF) files in
   # order to draw visual area annotations on the retinotopic maps for each
   # subject.
-  prf_files = {
-      "polar_angle": "pol.{aperture}",
-      "eccentricity": "ecc.{aperture}",
-      "cod": "rsq.{aperture}",
-  }
-  
+  nsd_prf_files = {
+      "polar_angle": "prfangle.mgz",
+      "eccentricity": "prfeccentricity.mgz",
+      "cod": "prfR2.mgz",
+      "wang15": "Kastner2015.mgz"}
   # This occipital pole mask is used with neuropythy's flatmap code; the tuple
   # indicates that the FreeSurfer parcellation property uses the value 43 to
   # indicate the occipital pole of the brain.
   occpole_mask = ('parcellation', 43)
-  # Find the sub-path for the subject's prf modeling outputs
-  prf_map_path = '/data/prf/prf-{aperture}/prf_Iso_fit_hrf_True_start_from_avg_True_n_surfs_9/{subject_id}'
 
 # We assume in this example that the libraries neuropythy and numpy have been
 # imported (as ny and np respectively) in the init section (see below).
@@ -49,10 +50,14 @@ targets:
   # a dropdown menu in the annotation tool because it is a list of multiple
   # choices rather than a code-block or a list with a single entry.
   Subject ID:
-    - sub-01
-    - sub-02
-    - sub-03
-    - sub-04
+    - subj01
+    - subj02
+    - subj03
+    - subj04
+    - subj05
+    - subj06
+    - subj07
+    - subj08
   # The 'subject' entry is a multi-line string, so it is interpreted as a Python
   # code snippet. This snippet is compiled into a function whose parameter list
   # contains only the variable `target`. The `target` will be a dictionary with
@@ -60,18 +65,44 @@ targets:
   subject: |
     # Get the subject ID that the user chose from the above selection list.
     sid = target['Subject ID']
-    # Find a sub-path for the subject's FreeSurfer directory
-    fs_path = "/data/freesurfer/{subject_id}".format(subject_id=sid)
+    # Find a sub-path for the subject's FreeSurfer directory; we get the
+    # nsd_path variable from the `init` section of the config.yaml file; see
+    # above.
+    fs_path = nsd_path.subpath('freesurfer', sid)
     # Load and return a FreeSurfer subject object for this path.
     return ny.freesurfer_subject(fs_path)
   # The 'Hemisphere' is a choice for the user; as a list of two options, it will
-  # appear as a dropdown menu with these two options in the annotation tool.
+  # appear as a dropdown meny with these two options in the annotation tool.
   Hemisphere:
     - LH
     - RH
-  Aperture:
-    - bar
-  
+  # We will want to include the Wang et al. (2015) probabilistic visual area
+  # atlas as an optional annotation that users can turn on and off (see the
+  # `builtin_annotations` section, below). This element of the target section
+  # loads the Wang atlas and applies it to the subject we are workign with.
+  wang15: |
+    import neuropythy.commands as nycmd, os
+    # Grab the subject object that was loaded in the 'subject' section.
+    sub = target['subject']
+    # We also need to know the hemisphere name.
+    h = target['Hemisphere'].lower()
+    # Get the subject's cache-path; this is tracked by neuropythy.
+    subpath = sub.pseudo_path.cache_path
+    # Possibly, this atlas has already been applied to this subject; if so, we
+    # don't need to (re-)run neuropythy's atlas command (which applies the atlas
+    # to the subject and saves it as a file).
+    wangpath = os.path.join(subpath, 'surf', f'{h}.wang15_mplbl.mgz')
+    if not os.path.isfile(wangpath):
+        # Make sure the fsaverage-alignment has already been loaded into cache;
+        # because the atlas command operates on the filesystem while the subject
+        # and cache path load things lazily, we need to make sure these have
+        # already been downloaded before we run the command.
+        sub.hemis['lh'].surface('fsaverage')
+        sub.hemis['rh'].surface('fsaverage')
+        # Now run the atlas command.
+        nycmd.atlas.main(["-awang15", "-fmgz", subpath])
+    # Load and return the file.
+    return ny.load(wangpath)
   # The 'cortex' key in the target data is for the cortical surface object,
   # which is managed and loaded by neuropythy from the subject's FreeSurfer
   # object. Note that the 'cortex' entry is like the 'subject' entry in that it
@@ -80,27 +111,23 @@ targets:
   # parameter will contain entries for 'Subject ID', 'subject', and 'Hemisphere'
   # from the sections above.
   cortex: |
-    # Extract the subject object and the hemisphere name.
+    # Extract the subject object and the hsmisphere name.
     sid = target['Subject ID']
     sub = target['subject']
-    ap = target['Aperture']
     h = target['Hemisphere'].lower()
-    # Load retinotopic mapping data from the prf output directory
+    # Load retinotopic mapping data from the label directory, where these data
+    # are stored on the NSD repository.
+    label_path = nsd_path.subpath('freesurfer', sid, 'label')
     props = {
-        k: ny.load(opj(prf_map_path.format(aperture=ap).format(subject_id=sid),h+'.'+filename.format(aperture=ap)+'.avg.mgh'))
-        for (k,filename) in prf_files.items()
-    }
+        k: ny.load(label_path.subpath(f'{h}.{filename}'))
+        for (k,filename) in nsd_prf_files.items()}
     # Convert the polar angle into Neuropythy's "visual" format (i.e., 0 degrees
     # is the upper vertical meridian, 90 degrees is the right horizontal
     # meridian, and -90 degrees is the left horizontal meridian.
     ang = props['polar_angle']
-    ang = np.asarray([degrees(a) for a in ang])
     props['polar_angle'] = np.mod(90 - ang + 180, 360) - 180
-
-    cod = props['cod']
-    props['cod'] = 100 * cod
     # Add the Wang et al. (2015) atlas, loaded in the above 'wang15' section.
-    # props['wang15'] = target['wang15']
+    props['wang15'] = target['wang15']
     # Grab the appropriate coretx/hemisphere object.
     cortex = sub.hemis[h]
     # Finally, return that hemisphere object with the properties associated with
@@ -133,32 +160,15 @@ annotations:
     grid:
       - ["polar_angle", "eccentricity"]
       - ["curvature", "cod"]
-  V1 Peripheral MidPoint (HM):
-    type: point
-    grid:
-      - ["polar_angle", "eccentricity"]
-      - ["curvature", "cod"]
-  V1 Ventral Periphery:
+  V1 Periphery:
     fixed_head:
       requires: V1 UVM (ventral)
       calculate: |
         return annotations['V1 UVM (ventral)'][-1,:]
-    fixed_tail: V1 Peripheral MidPoint (HM)
-    grid:
-      - ["polar_angle", "eccentricity"]
-      - ["curvature", "cod"]
-  V1 Dorsal Periphery:
-    fixed_head: 
+    fixed_tail:
       requires: V1 LVM (dorsal)
       calculate: |
         return annotations['V1 LVM (dorsal)'][-1,:]
-    fixed_tail: V1 Peripheral MidPoint (HM)
-    grid:
-      - ["polar_angle", "eccentricity"]
-      - ["curvature", "cod"] 
-  V1 HM:
-    fixed_head: V1 Foveal Point
-    fixed_tail: V1 Peripheral MidPoint (HM)
     grid:
       - ["polar_angle", "eccentricity"]
       - ["curvature", "cod"]
@@ -202,12 +212,6 @@ annotations:
     grid:
       - ["polar_angle", "eccentricity"]
       - ["curvature", "cod"]
-  V2 HM:
-    fixed_head: V2 Foveal Point
-    fixed_tail: V1 Foveal Point
-    grid:
-      - ["polar_angle", "eccentricity"]
-      - ["curvature", "cod"]
   # V3 contours:
   V3 Foveal Point:
     type: point
@@ -248,12 +252,22 @@ annotations:
     grid:
       - ["polar_angle", "eccentricity"]
       - ["curvature", "cod"]
-  V3 HM:
-    fixed_head: V3 Foveal Point
-    fixed_tail: V2 Foveal Point
-    grid:
-      - ["polar_angle", "eccentricity"]
-      - ["curvature", "cod"]
+
+builtin_annotations:
+  Wang2015 Atlas:
+    type: points
+    plot_options:
+      color: [1, 1, 0]
+      markersize: 1
+      visible: false
+    data: |
+      fmap = target['flatmap']
+      (u,v) = fmap.tess.indexed_edges
+      w = fmap.prop('wang15')
+      xy = fmap.coordinates
+      ii = w[u] != w[v]
+      dat = np.mean([xy[:,u[ii]], xy[:,v[ii]]], axis=0)
+      return [dat.T]
 
 figures:
   term: |
@@ -280,12 +294,8 @@ review: |
   # V1:
   v1uvm = annotations['V1 UVM (ventral)']
   v1lvm = annotations['V1 LVM (dorsal)']
-  #v1per = annotations['V1 Periphery']
-  #v1pol = np.vstack([v1uvm, v1per, np.flipud(v1lvm)])
-  v1pev = annotations['V1 Ventral Periphery']
-  v1ped = annotations['V1 Dorsal Periphery']
-  v1pol = np.vstack(
-      [v1uvm, v1pev, np.flipud(v1ped), np.flipud(v1lvm)])
+  v1per = annotations['V1 Periphery']
+  v1pol = np.vstack([v1uvm, v1per, np.flipud(v1lvm)])
   # V2:
   v2uvm = annotations['V2 UVM (ventral)']
   v2lvm = annotations['V2 LVM (dorsal)']
@@ -300,76 +310,25 @@ review: |
   v3ped = annotations['V3 Dorsal Periphery']
   v3pol = np.vstack(
       [v3uvm, v3pev, np.flipud(v2uvm), v2lvm, np.flipud(v3ped), np.flipud(v3lvm)])
-  # V1-V3 split into dorsal/ventral:
-  v1hm = annotations['V1 HM']
-  v2hm = annotations['V2 HM']
-  v3hm = annotations['V3 HM']
-  v1dpol = np.vstack(
-      [v1hm, np.flipud(v1ped), np.flipud(v1lvm)])
-  v1vpol = np.vstack(
-      [v1uvm, v1pev, np.flipud(v1hm)])
-  v2dpol = np.vstack(
-      [v2hm, v1lvm, np.flipud(v2ped), np.flipud(v2lvm)])
-  v2vpol = np.vstack(
-      [v2uvm, v2pev, np.flipud(v1uvm), np.flipud(v2hm)])
-  v3dpol = np.vstack(
-      [v3hm, v2lvm, np.flipud(v3ped), np.flipud(v3lvm)])
-  v3vpol = np.vstack(
-      [v3uvm, v3pev, np.flipud(v2uvm), np.flipud(v3hm)])
-
   # Turn these into traces:
   fmap = target['flatmap']
   v1_trace = ny.path_trace(fmap, v1pol.T, closed=True)
   v2_trace = ny.path_trace(fmap, v2pol.T, closed=True)
   v3_trace = ny.path_trace(fmap, v3pol.T, closed=True)
-  v1d_trace = ny.path_trace(fmap, v1dpol.T, closed=True)
-  v1v_trace = ny.path_trace(fmap, v1vpol.T, closed=True)
-  v2d_trace = ny.path_trace(fmap, v2dpol.T, closed=True)
-  v2v_trace = ny.path_trace(fmap, v2vpol.T, closed=True)
-  v3d_trace = ny.path_trace(fmap, v3dpol.T, closed=True)
-  v3v_trace = ny.path_trace(fmap, v3vpol.T, closed=True)
-
   # Convert the path traces into paths then into labels:
   cortex = target['cortex']
   v1_path = v1_trace.to_path(cortex)
   v2_path = v2_trace.to_path(cortex)
   v3_path = v3_trace.to_path(cortex)
-  v1d_path = v1d_trace.to_path(cortex)
-  v1v_path = v1v_trace.to_path(cortex)
-  v2d_path = v2d_trace.to_path(cortex)
-  v2v_path = v2v_trace.to_path(cortex)
-  v3d_path = v3d_trace.to_path(cortex)
-  v3v_path = v3v_trace.to_path(cortex)
-
   v1 = v1_path.label > 0.5
   v2 = v2_path.label > 0.5
   v3 = v3_path.label > 0.5
-  v1d = v1d_path.label > 0.5
-  v1v = v1v_path.label > 0.5
-  v2d = v2d_path.label > 0.5
-  v2v = v2v_path.label > 0.5
-  v3d = v3d_path.label > 0.5
-  v3v = v3v_path.label > 0.5
-
   if np.sum(v1) > np.sum(~v1):
     v1 = ~v1
   if np.sum(v2) > np.sum(~v2):
     v2 = ~v2
   if np.sum(v3) > np.sum(~v3):
     v3 = ~v3
-  if np.sum(v1d) > np.sum(~v1d):
-    v1d = ~v1d
-  if np.sum(v1v) > np.sum(~v1v):
-    v1v = ~v1v
-  if np.sum(v2d) > np.sum(~v2d):
-    v2d = ~v2d
-  if np.sum(v2v) > np.sum(~v2v):
-    v2v = ~v2v
-  if np.sum(v3d) > np.sum(~v3d):  
-    v3d = ~v3d
-  if np.sum(v3v) > np.sum(~v3v):  
-    v3v = ~v3v
-
   labels = np.zeros(cortex.vertex_count, dtype=int)
   labels[v1] = 1
   labels[v2] = 2
@@ -388,23 +347,3 @@ review: |
   axes.axis('equal')
   axes.axis('off')
 
-  labels = np.zeros(cortex.vertex_count, dtype=int)
-  labels[v1d] = 1
-  labels[v1v] = 2
-  labels[v2d] = 3
-  labels[v2v] = 4
-  labels[v3d] = 5
-  labels[v3v] = 6
-  fmap_labels = labels[fmap.labels]
-  # If the user saves the contours, we want to save these labels.
-  save_hooks['v123dv-labels.mgz'] = lambda filename: ny.save(filename, labels)
-  # Plot the results:
-  ny.cortex_plot(
-      fmap,
-      color=fmap_labels,
-      cmap='rainbow',
-      mask=(fmap_labels > 0),
-      axes=axes,
-      alpha=0.5)
-  axes.axis('equal')
-  axes.axis('off')

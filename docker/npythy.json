@@ -2,7 +2,7 @@
                                     "/config/freesurfer/subjects"],
  "data_cache_root":                "/cache/neuropythy",
  "hcp_subject_paths":              "/cache/hcp/subjects",
- "hcp_auto_download":              true,
+ "hcp_auto_download":              false,
  "hcp_auto_path":                  "/cache/hcp/subjects",
  "hcp_credentials":                "/config/credentials",
  "hcp_lines_path":                 "/cache/hcp/lines",
